@@ -333,28 +333,34 @@ first_touchpoint_channel, last_touchpoint_channe */
 
 
 
-   WITH a AS (
+ WITH a0 AS (
+   SELECT uuid, created_at, campaign_channel, conversion
+  FROM events
+ GROUP BY uuid, created_at, campaign_channel, conversion
+) 
    
-   SELECT uuid,
-       created_at,
-       SUM(is_new_session) OVER (ORDER BY uuid, created_at) AS global_session_id,
-       SUM(is_new_session) OVER (PARTITION BY uuid ORDER BY created_at) AS user_session_id,
-       campaign_channel,
-       conversion
+  , a AS ( 
+   
+  SELECT uuid,
+      created_at,
+      SUM(is_new_session) OVER (ORDER BY uuid, created_at) AS global_session_id,
+      SUM(is_new_session) OVER (PARTITION BY uuid ORDER BY created_at) AS user_session_id,
+      campaign_channel,
+      conversion
       FROM (
         SELECT *,
-               CASE WHEN (strftime('%s',created_at) - strftime('%s',last_event))/60 > 30
+              CASE WHEN (strftime('%s',created_at) - strftime('%s',last_event))/60 > 30
              OR last_event IS NULL
-           THEN 1 ELSE 0 END AS is_new_session
+          THEN 1 ELSE 0 END AS is_new_session
          FROM (
               SELECT uuid,
                      created_at,
                      LAG(created_at,1) OVER (PARTITION BY uuid ORDER BY created_at) AS last_event, 
                      campaign_channel, 
                      conversion
-                FROM events
+                FROM a0
               ) last
-       ) final 
+      ) final 
             ORDER BY uuid, created_at, global_session_id, user_session_id
               )
           
@@ -365,22 +371,17 @@ first_touchpoint_channel, last_touchpoint_channe */
      GROUP BY uuid
   )
        
-      , last_touch AS (
-      SELECT uuid, user_session_id, global_session_id, created_at,
+    , last_first AS (
+      SELECT a.uuid, a.user_session_id, global_session_id, created_at,
         campaign_channel, conversion
-      , CASE WHEN conversion = 1 THEN 'last_touchpoint' END AS campaign_touchpoint
+      , CASE WHEN conversion = 1 THEN 'last_touchpoint'
+            WHEN a.user_session_id = f.min_session_id THEN 'first_touchpoint'  END AS campaign_touchpoint
        
-      FROM a 
+      FROM a LEFT JOIN first_touch f ON a.uuid = f.uuid AND a.user_session_id = f.min_session_id
+      ORDER BY 1, 2
       ) 
        
-      , b AS (
-       SELECT l.uuid, user_session_id, global_session_id, created_at, campaign_channel, conversion,
-       CASE WHEN campaign_touchpoint = "last_touchpoint"  THEN  'last_touchpoint'  
-        WHEN l.user_session_id = f.min_session_id  THEN 'first_touchpoint'
-        WHEN   l.user_session_id = f.min_session_id  AND  campaign_touchpoint = "last_touchpoint" THEN 'last_touchpoint' END  AS campaign_touchpoint --AND campaign_touchpoint != "last_touchpoint"
-       FROM last_touch l LEFT JOIN first_touch f ON l.uuid = f.uuid AND l.user_session_id = f.min_session_id
-       ) 
-       
+   
       , last_touch3 AS (
       
       SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, conversion, campaign_touchpoint,
@@ -388,16 +389,29 @@ first_touchpoint_channel, last_touchpoint_channe */
       
       FROM 
       (SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, conversion, campaign_touchpoint
-      , ROW_NUMBER() OVER (PARTITION BY uuid, campaign_channel ORDER BY user_session_id ) AS rownum 
-      FROM b 
+      , ROW_NUMBER() OVER (PARTITION BY uuid ORDER BY user_session_id, created_at ) AS rownum 
+      FROM last_first
       WHERE campaign_touchpoint = "last_touchpoint") last_touch2
-          ) 
+        ) 
           
           
-         SELECT b.uuid, b.user_session_id, b.global_session_id, b.campaign_channel, b.campaign_touchpoint,
+        , b AS ( 
+        
+        SELECT lf.uuid, lf.user_session_id, lf.global_session_id, lf.created_at, lf.conversion,  lf.campaign_channel, lf.campaign_touchpoint,
          last_touchpoint_seq
-         FROM b LEFT JOIN last_touch3 l ON b.uuid = l.uuid AND b.user_session_id = l.user_session_id
-       --  WHERE  b.campaign_touchpoint = "first_touchpoint" AND l.last_touchpoint_seq LIKE "last_touch%"
-     
-        ORDER BY 1, 2 
-  
+         FROM last_first lf LEFT JOIN last_touch3 l ON lf.uuid = l.uuid AND lf.user_session_id = l.user_session_id 
+         AND  lf.campaign_channel  = l.campaign_channel AND lf.conversion = l.conversion
+         ORDER BY 1, 2
+        ) 
+         
+         
+         SELECT uuid, user_session_id, global_session_id, created_at
+        , MIN(CASE WHEN campaign_touchpoint = "first_touchpoint" THEN campaign_channel END) AS  first_touchpoint_channel
+        --, MIN(CASE WHEN campaign_touchpoint = "last_touchpoint" THEN campaign_channel END) AS  last_touchpoint_channel
+        , MIN(CASE WHEN last_touchpoint_seq = "last_touchpoint_1" THEN campaign_channel END ) AS last_touchpoint_channel1
+        , MIN(CASE WHEN last_touchpoint_seq = "last_touchpoint_2" THEN campaign_channel END ) AS last_touchpoint_channel2
+        , MIN(CASE WHEN last_touchpoint_seq = "last_touchpoint_3"THEN campaign_channel END ) AS last_touchpoint_channel3
+         FROM b 
+         WHERE campaign_touchpoint IS NOT NULL OR campaign_touchpoint != '' 
+         GROUP BY  uuid, user_session_id, global_session_id, created_at
+         ORDER BY 1, 2
