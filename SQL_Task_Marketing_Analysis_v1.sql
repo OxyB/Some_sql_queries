@@ -1,8 +1,6 @@
 /* TASK 1 */
 
-/*How many users are there per country, per geo area and per year of registration */
-
-
+/*1.1 How many users are there per country, per geo area and per year of registration */
 
 SELECT YEAR(date_sk) year_of_registration
 , country_name
@@ -15,7 +13,7 @@ GROUP BY YEAR(date_sk)
 , geo_area
 
 
-/*How many purchases happened per country, per geo_area and per year of registration? */
+/* 1.2 How many purchases happened per country, per geo_area and per year of registration? */
 
 SELECT YEAR(u.date_sk) year_of_registration
 , country_name
@@ -28,7 +26,8 @@ GROUP BY YEAR(u.date_sk)
 , country_name
 , geo_area
 
-/* How many purchases are there per campaign, per subchannel and per month of
+
+/* 1.3 How many purchases are there per campaign, per subchannel and per month of
 purchase? */
 
 SELECT campaign_name
@@ -46,7 +45,7 @@ GROUP BY  campaign_name
 , CONCAT(CAST(YEAR(s.date_sk) AS varchar), "-",CAST(MONTH(s.date_sk) AS varchar )) 
 
 
-/* Which is the Sales-to-Lead ratio (number of sales per purchase date / number of leads
+/* 1.4 Which is the Sales-to-Lead ratio (number of sales per purchase date / number of leads
 per registration date) per campaign and per date?*/
 
 WITH sales AS (
@@ -73,7 +72,7 @@ SELECT ROUND(nr_sales/CAST(nr_sales AS DECIMAL),4) AS sales_to_lead_ratio
 FROM sales RIGHT JOIN leads
 ON sales.date = leads.date AND sales.campaign_name = leads_campaign_name
 
-/*Which are the top 10 new sales revenues per subchannel per month of purchase?
+/* 1.5 Which are the top 10 new sales revenues per subchannel per month of purchase?
 Hint: New Sales Revenues: purchase_transaction_ID with is_first_period = 'first_sale'
 */
 
@@ -93,21 +92,22 @@ sub_channel
 , MONTH(s.date_sk) 
 , CONCAT(CAST(YEAR(s.date_sk) AS varchar), "-",CAST(MONTH(s.date_sk) AS varchar ))
 
+						    
 /*TASK 2: focuses on user sessions on the website and the handling of those
-in our database */
-
-/* User events are grouped into sessions. We define a session as a sequence of events with the
+in our database 
+						    
+User events are grouped into sessions. We define a session as a sequence of events with the
 same user ID, ordered by timestamp, such that the time difference between any consecutive
 pair of events is at most one hour.*/
 
-/* How would you calculate the average session duration? */
+/* 2.1 How would you calculate the average session duration? */
 
 SELECT AVG(DATEDIFF(minute,session_end, session_start)) avg_session_duration
 FROM Sessions 
 
 
-/*How to know how many users have several sessions a day? How many sessions do
-they do?*/
+/* 2.2 How to know how many users have several sessions a day? How many sessions do
+they do? (2.3)*/
 
 -- How to know how many users have several sessions a day?
 -- This query shows how many users have 1, 2, 3 to 8 and more than 8 sessions per day. The output shows the frequency of number of users per
@@ -149,7 +149,7 @@ ORDER BY 1, 3, 2
 ;
 
 
--- Without nr_sessions_category 
+-- Without nr_sessions_category, but per each number of sessions 
 WITH t1 AS (
 SELECT uuid 
 , DATE(date_start) date
@@ -183,8 +183,12 @@ FROM t3
 GROUP BY 1, 2
 ORDER BY 1, 3 desc, 2
 
--- In this query show how many users have 1, 2, 3 to 8 and more than 8 sessions per day. The output shows the frequency of number of users per
--- nr_sessions_category 
+		  
+/* Here instead of frequency of number of users per number of sessions (or number of sessions categories)
+		    I show average number of users per nr of sessions (categories of number of sessions)*/
+
+-- In this query I am showing how many users have 1, 2, 3 to 8 and more than 8 sessions per day. The output shows the frequency of number of users per
+-- nr_sessions_category  
 
 WITH t1 AS (
 SELECT uuid 
@@ -256,9 +260,9 @@ GROUP BY 1
 ORDER BY 1, 2 desc;
 
 
--- How many sessions do they do?
+-- 2.3 How many sessions do they do?
 		-- In this query firstly I count number sessions per date and user 
-		-- Afterwards I am taking average number of sessions if the number of sessions in the first subquery I more than 2 (possible to check more than 1, depending 
+		-- Afterwards, I am taking average number of sessions if the number of sessions in the first subquery is more than 2 (possible to check more than 1, depending 
 		-- on what interests you )
 		
 
@@ -277,7 +281,7 @@ AVG(nr_sessions)
 	WHERE nr_sessions > 2;
 					
 
-/*Though in theory, a session_id is supposed to be unique, there happen to be duplicates.
+/* 2.4 Though in theory, a session_id is supposed to be unique, there happen to be duplicates.
 How would you proceed to find and remove them? */
 
 SELECT uuid
@@ -326,7 +330,6 @@ use SQL syntax to query the events.
 },
 "type_of_conversion": 'registrations'
 }
-
 
 -- Write a SQL query to find the number of distinct app_name and os_version
 SELECT DISTINCT scr:meta.app_name::string
