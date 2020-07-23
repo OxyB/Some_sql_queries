@@ -35,6 +35,9 @@ per campaign */
 
 -- scr:created_at, scr:name, scr:type_of_conversion, scr:meta.country, scr:campaign_name
 -- FLATTEN only meta. 
+ 
+/*The code is not correct!!! I am still testing it */ 
+-- The most important to understand if I do FLATTEN correctly 
 
 WITH base AS (
 SELECT scr:name::string AS "name", scr:uuid::int AS "uuid", scr:created_at::date AS "created_at", scr:campaign_name::string AS "campaign_name"
@@ -46,8 +49,8 @@ FROM  events
 	
 	, t AS (
 	SELECT  uuid, name, country, campaign_name
-		, CASE WHEN type_of_conversion = "registrations" THEN created_at END AS reg_date 
-		, CASE WHEN type_of_conversion = "purchases" THEN created_at END AS pur_date 
+		, MIN(CASE WHEN type_of_conversion = "registrations" THEN created_at END) AS reg_date 
+		, MIN(CASE WHEN type_of_conversion = "purchases" THEN created_at END) AS pur_date 
 	FROM base
 	WHERE type_of_conversion IN ("registrations", "purchases")
 	GROUP BY uuid, conversion_event, country, campaign_name
@@ -66,7 +69,7 @@ FROM  events
 
 
 
-/* If there is another event name called “campaign_touchpoint”(i.e. different campaign
+/* 3.3 If there is another event name called “campaign_touchpoint”(i.e. different campaign
 touchpoint which users’ contact point before he or she converted), write a SQL to identify
 the first touchpoint channel, last touchpoint channel per user per session (default
 session length = 30 mins). Your result must contain UUID, session_Id,
@@ -87,7 +90,7 @@ first_touchpoint_channel, last_touchpoint_channe */
 "type_of_conversion": 'registrations'
 }
 
-/* I SQL Snowflake */ 
+/* In SQL Snowflake */ 
 
   WITH a0 AS (
    SELECT scr:uuid::int AS "uuid",  scr:created_at::datetime AS "created_at", scr:campaign_channel::string AS "campaign_channel"
