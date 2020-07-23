@@ -1,3 +1,253 @@
+/* TASK 3
+Our conversion event looks similar to the structure shown below. In Snowflake, we can
+use SQL syntax to query the events.
+ */
+{
+"name": 'conversion_event'
+"created_at" : 2020-01-01 00:00:00,
+"uuid" : 12314512441312312,
+"campaign_name": campaign_name1,
+"campaign_channel": channel1,
+"meta":{
+"app_name": iOS,
+"os_version": 11,
+"country" : ABC,
+"latitude": 12.12,
+"longitude": 12.12,
+},
+"type_of_conversion": 'registrations'
+}
+
+-- Write a SQL query to find the number of distinct app_name and os_version
+SELECT DISTINCT scr:meta.app_name::string
+FROM events 
+
+-- or  
+
+SELECT scr:meta.app_name::string
+FROM events 
+GROUP BY 1
+
+
+/* If there are two types of conversion like registrations and purchases, write a SQL to
+calculate the average number of days between registrations and purchases per country
+per campaign */ 
+
+-- scr:created_at, scr:name, scr:type_of_conversion, scr:meta.country, scr:campaign_name
+-- FLATTEN only meta. 
+
+WITH base AS (
+SELECT scr:name::string AS "name", scr:uuid::int AS "uuid", scr:created_at::date AS "created_at", scr:campaign_name::string AS "campaign_name"
+, country.value::string AS "country"
+FROM  events
+	,   LATERAL FLATTEN (scr:meta) as meta
+	,   LATERAL FLATTEN (meta.value:"country") as country 
+	) 
+	
+	, t AS (
+	SELECT  uuid, name, country, campaign_name
+		, CASE WHEN type_of_conversion = "registrations" THEN created_at END AS reg_date 
+		, CASE WHEN type_of_conversion = "purchases" THEN created_at END AS pur_date 
+	FROM base
+	WHERE type_of_conversion IN ("registrations", "purchases")
+	GROUP BY uuid, conversion_event, country, campaign_name
+	) 
+	
+	, t2 AS ( 
+	SELECT country, campaign_name
+	, DATEDIFF(day, pur_date, reg_date) AS days_diff
+	FROM t 
+	 ) 
+	 
+	SELECT country, campaign_name, AVG(days_diff) as avg_days_dif
+	FROM t2 
+	GROUP BY country, campaign_name
+	
+
+
+
+/* If there is another event name called “campaign_touchpoint”(i.e. different campaign
+touchpoint which users’ contact point before he or she converted), write a SQL to identify
+the first touchpoint channel, last touchpoint channel per user per session (default
+session length = 30 mins). Your result must contain UUID, session_Id,
+first_touchpoint_channel, last_touchpoint_channe */
+{
+"name": 'conversion_event'
+"created_at" : 2020-01-01 00:00:00,
+"uuid" : 12314512441312312,
+"campaign_name": campaign_name1,
+"campaign_channel": channel1,
+"meta":{
+"app_name": iOS,
+"os_version": 11,
+"country" : ABC,
+"latitude": 12.12,
+"longitude": 12.12,
+},
+"type_of_conversion": 'registrations'
+}
+
+/* I SQL Snowflake */ 
+
+  WITH a0 AS (
+   SELECT scr:uuid::int AS "uuid",  scr:created_at::datetime AS "created_at", scr:campaign_channel::string AS "campaign_channel"
+   , scr:type_of_conversion::string AS "type_of_conversion", scr:name::string AS "event_name"
+  FROM events
+ GROUP BY scr:uuid::int, scr:created_at::datetime, cr:campaign_channel::string,  scr:type_of_conversion::string, scr:name::string
+) 
+   
+  , a AS ( 
+   
+  SELECT uuid,
+      created_at,
+      SUM(is_new_session) OVER (ORDER BY uuid, created_at) AS global_session_id,
+      SUM(is_new_session) OVER (PARTITION BY uuid ORDER BY created_at) AS user_session_id,
+      campaign_channel,
+      type_of_conversion
+      FROM (
+        SELECT *,
+             CASE WHEN EXTRACT('EPOCH' FROM created_at) - EXTRACT('EPOCH' FROM last_event) >  (60 * 30) 
+             OR last_event IS NULL
+          THEN 1 ELSE 0 END AS is_new_session
+         FROM (
+              SELECT uuid,
+                     created_at,
+                     LAG(created_at,1) OVER (PARTITION BY uuid ORDER BY created_at) AS last_event, 
+                     campaign_channel, 
+                     type_of_conversion
+                FROM a0
+              ) last
+      ) final 
+           -- ORDER BY uuid, created_at, global_session_id, user_session_id
+              )
+          
+              
+  , first_touch AS ( 
+     SELECT uuid, MIN(user_session_id) min_session_id
+     FROM a 
+     GROUP BY uuid
+  )
+       
+    , last_first AS (
+      SELECT a.uuid, a.user_session_id, global_session_id, created_at,
+        campaign_channel, type_of_conversion
+      , CASE WHEN type_of_conversion IN ("purchases","registrations")  THEN 'last_touchpoint'
+            WHEN a.user_session_id = f.min_session_id THEN 'first_touchpoint'  END AS campaign_touchpoint
+       
+      FROM a LEFT JOIN first_touch f ON a.uuid = f.uuid AND a.user_session_id = f.min_session_id
+      ORDER BY 1, 2
+      ) 
+       
+   
+      , last_touch3 AS (
+      
+      SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, type_of_conversion, campaign_touchpoint,
+      "last_touchpoint" || "_" || CAST(rownum AS varchar)  AS last_touchpoint_seq
+      
+      FROM 
+      (SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, type_of_conversion, campaign_touchpoint
+      , ROW_NUMBER() OVER (PARTITION BY uuid ORDER BY user_session_id, created_at ) AS rownum 
+      FROM last_first
+      WHERE campaign_touchpoint = "last_touchpoint") last_touch2
+        ) 
+          
+          
+        , b AS ( 
+        
+        SELECT lf.uuid, lf.user_session_id, lf.global_session_id, lf.created_at, lf.type_of_conversion,  lf.campaign_channel, lf.campaign_touchpoint,
+         last_touchpoint_seq
+         FROM last_first lf LEFT JOIN last_touch3 l ON lf.uuid = l.uuid AND lf.user_session_id = l.user_session_id 
+         AND  lf.campaign_channel  = l.campaign_channel AND lf.type_of_conversion = l.type_of_conversion
+         ORDER BY 1, 2
+        ) 
+         
+         
+         SELECT uuid, user_session_id, global_session_id, created_at
+        , MIN(CASE WHEN campaign_touchpoint = "first_touchpoint" THEN campaign_channel END) AS  first_touchpoint_channel
+        --, MIN(CASE WHEN campaign_touchpoint = "last_touchpoint" THEN campaign_channel END) AS  last_touchpoint_channel
+        , MIN(CASE WHEN last_touchpoint_seq = "last_touchpoint_1" THEN campaign_channel END ) AS last_touchpoint_channel1
+        , MIN(CASE WHEN last_touchpoint_seq = "last_touchpoint_2" THEN campaign_channel END ) AS last_touchpoint_channel2
+        , MIN(CASE WHEN last_touchpoint_seq = "last_touchpoint_3"THEN campaign_channel END ) AS last_touchpoint_channel3
+         FROM b 
+         WHERE campaign_touchpoint IS NOT NULL OR campaign_touchpoint != '' 
+         GROUP BY  uuid, user_session_id, global_session_id, created_at
+         ORDER BY 1, 2
+  
+
+
+
+/* Version in SQLite   */ 
+
+   WITH a AS (
+   
+   SELECT uuid,
+       created_at,
+       SUM(is_new_session) OVER (ORDER BY uuid, created_at) AS global_session_id,
+       SUM(is_new_session) OVER (PARTITION BY uuid ORDER BY created_at) AS user_session_id,
+       campaign_channel,
+       conversion
+      FROM (
+        SELECT *,
+               CASE WHEN (strftime('%s',created_at) - strftime('%s',last_event))/60 > 30
+             OR last_event IS NULL
+           THEN 1 ELSE 0 END AS is_new_session
+         FROM (
+              SELECT uuid,
+                     created_at,
+                     LAG(created_at,1) OVER (PARTITION BY uuid ORDER BY created_at) AS last_event, 
+                     campaign_channel, 
+                     conversion
+                FROM events
+              ) last
+       ) final 
+            ORDER BY uuid, created_at, global_session_id, user_session_id
+              )
+          
+              
+  , first_touch AS ( 
+     SELECT uuid, MIN(user_session_id) min_session_id
+     FROM a 
+     GROUP BY uuid
+  )
+       
+      , last_touch AS (
+      SELECT uuid, user_session_id, global_session_id, created_at,
+        campaign_channel, conversion
+      , CASE WHEN conversion = 1 THEN 'last_touchpoint' END AS campaign_touchpoint
+       
+      FROM a 
+      ) 
+       
+      , b AS (
+       SELECT l.uuid, user_session_id, global_session_id, created_at, campaign_channel, conversion,
+       CASE WHEN campaign_touchpoint = "last_touchpoint"  THEN  'last_touchpoint'  
+        WHEN l.user_session_id = f.min_session_id  THEN 'first_touchpoint'
+        WHEN   l.user_session_id = f.min_session_id  AND  campaign_touchpoint = "last_touchpoint" THEN 'last_touchpoint' END  AS campaign_touchpoint --AND campaign_touchpoint != "last_touchpoint"
+       FROM last_touch l LEFT JOIN first_touch f ON l.uuid = f.uuid AND l.user_session_id = f.min_session_id
+       ) 
+       
+      , last_touch3 AS (
+      
+      SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, conversion, campaign_touchpoint,
+      "last_touchpoint" || "_" || CAST(rownum AS varchar)  AS last_touchpoint_seq
+      
+      FROM 
+      (SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, conversion, campaign_touchpoint
+      , ROW_NUMBER() OVER (PARTITION BY uuid, campaign_channel ORDER BY user_session_id ) AS rownum 
+      FROM b 
+      WHERE campaign_touchpoint = "last_touchpoint") last_touch2
+          ) 
+          
+          
+         SELECT b.uuid, b.user_session_id, b.global_session_id, b.campaign_channel, b.campaign_touchpoint,
+         last_touchpoint_seq
+         FROM b LEFT JOIN last_touch3 l ON b.uuid = l.uuid AND b.user_session_id = l.user_session_id
+       --  WHERE  b.campaign_touchpoint = "first_touchpoint" AND l.last_touchpoint_seq LIKE "last_touch%"
+     
+        ORDER BY 1, 2 
+  
+
+
 /* TASK 1 */
 
 /*1.1 How many users are there per country, per geo area and per year of registration */
@@ -311,251 +561,3 @@ AND s1.session_id != s2.session_id
 WHERE rownum > 1
 
 
-/* TASK 3
-Our conversion event looks similar to the structure shown below. In Snowflake, we can
-use SQL syntax to query the events.
- */
-{
-"name": 'conversion_event'
-"created_at" : 2020-01-01 00:00:00,
-"uuid" : 12314512441312312,
-"campaign_name": campaign_name1,
-"campaign_channel": channel1,
-"meta":{
-"app_name": iOS,
-"os_version": 11,
-"country" : ABC,
-"latitude": 12.12,
-"longitude": 12.12,
-},
-"type_of_conversion": 'registrations'
-}
-
--- Write a SQL query to find the number of distinct app_name and os_version
-SELECT DISTINCT scr:meta.app_name::string
-FROM events 
-
--- or  
-
-SELECT scr:meta.app_name::string
-FROM events 
-GROUP BY 1
-
-
-/* If there are two types of conversion like registrations and purchases, write a SQL to
-calculate the average number of days between registrations and purchases per country
-per campaign */ 
-
--- scr:created_at, scr:name, scr:type_of_conversion, scr:meta.country, scr:campaign_name
--- FLATTEN only meta. 
-
-WITH base AS (
-SELECT scr:name::string AS "name", scr:uuid::int AS "uuid", scr:created_at::date AS "created_at", scr:campaign_name::string AS "campaign_name"
-, country.value::string AS "country"
-FROM  events
-	,   LATERAL FLATTEN (scr:meta) as meta
-	,   LATERAL FLATTEN (meta.value:"country") as country 
-	) 
-	
-	, t AS (
-	SELECT  uuid, name, country, campaign_name
-		, CASE WHEN type_of_conversion = "registrations" THEN created_at END AS reg_date 
-		, CASE WHEN type_of_conversion = "purchases" THEN created_at END AS pur_date 
-	FROM base
-	WHERE type_of_conversion IN ("registrations", "purchases")
-	GROUP BY uuid, conversion_event, country, campaign_name
-	) 
-	
-	, t2 AS ( 
-	SELECT country, campaign_name
-	, DATEDIFF(day, pur_date, reg_date) AS days_diff
-	FROM t 
-	 ) 
-	 
-	SELECT country, campaign_name, AVG(days_diff) as avg_days_dif
-	FROM t2 
-	GROUP BY country, campaign_name
-	
-
-
-
-/* If there is another event name called “campaign_touchpoint”(i.e. different campaign
-touchpoint which users’ contact point before he or she converted), write a SQL to identify
-the first touchpoint channel, last touchpoint channel per user per session (default
-session length = 30 mins). Your result must contain UUID, session_Id,
-first_touchpoint_channel, last_touchpoint_channe */
-{
-"name": 'conversion_event'
-"created_at" : 2020-01-01 00:00:00,
-"uuid" : 12314512441312312,
-"campaign_name": campaign_name1,
-"campaign_channel": channel1,
-"meta":{
-"app_name": iOS,
-"os_version": 11,
-"country" : ABC,
-"latitude": 12.12,
-"longitude": 12.12,
-},
-"type_of_conversion": 'registrations'
-}
-
-/* I SQL Snowflake */ 
-
-  WITH a0 AS (
-   SELECT scr:uuid::int AS "uuid",  scr:created_at::datetime AS "created_at", scr:campaign_channel::string AS "campaign_channel"
-   , scr:type_of_conversion::string AS "type_of_conversion", scr:name::string AS "event_name"
-  FROM events
- GROUP BY scr:uuid::int, scr:created_at::datetime, cr:campaign_channel::string,  scr:type_of_conversion::string, scr:name::string
-) 
-   
-  , a AS ( 
-   
-  SELECT uuid,
-      created_at,
-      SUM(is_new_session) OVER (ORDER BY uuid, created_at) AS global_session_id,
-      SUM(is_new_session) OVER (PARTITION BY uuid ORDER BY created_at) AS user_session_id,
-      campaign_channel,
-      type_of_conversion
-      FROM (
-        SELECT *,
-             CASE WHEN EXTRACT('EPOCH' FROM created_at) - EXTRACT('EPOCH' FROM last_event) >  (60 * 30) 
-             OR last_event IS NULL
-          THEN 1 ELSE 0 END AS is_new_session
-         FROM (
-              SELECT uuid,
-                     created_at,
-                     LAG(created_at,1) OVER (PARTITION BY uuid ORDER BY created_at) AS last_event, 
-                     campaign_channel, 
-                     type_of_conversion
-                FROM a0
-              ) last
-      ) final 
-           -- ORDER BY uuid, created_at, global_session_id, user_session_id
-              )
-          
-              
-  , first_touch AS ( 
-     SELECT uuid, MIN(user_session_id) min_session_id
-     FROM a 
-     GROUP BY uuid
-  )
-       
-    , last_first AS (
-      SELECT a.uuid, a.user_session_id, global_session_id, created_at,
-        campaign_channel, type_of_conversion
-      , CASE WHEN type_of_conversion IN ("purchases","registrations")  THEN 'last_touchpoint'
-            WHEN a.user_session_id = f.min_session_id THEN 'first_touchpoint'  END AS campaign_touchpoint
-       
-      FROM a LEFT JOIN first_touch f ON a.uuid = f.uuid AND a.user_session_id = f.min_session_id
-      ORDER BY 1, 2
-      ) 
-       
-   
-      , last_touch3 AS (
-      
-      SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, type_of_conversion, campaign_touchpoint,
-      "last_touchpoint" || "_" || CAST(rownum AS varchar)  AS last_touchpoint_seq
-      
-      FROM 
-      (SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, type_of_conversion, campaign_touchpoint
-      , ROW_NUMBER() OVER (PARTITION BY uuid ORDER BY user_session_id, created_at ) AS rownum 
-      FROM last_first
-      WHERE campaign_touchpoint = "last_touchpoint") last_touch2
-        ) 
-          
-          
-        , b AS ( 
-        
-        SELECT lf.uuid, lf.user_session_id, lf.global_session_id, lf.created_at, lf.type_of_conversion,  lf.campaign_channel, lf.campaign_touchpoint,
-         last_touchpoint_seq
-         FROM last_first lf LEFT JOIN last_touch3 l ON lf.uuid = l.uuid AND lf.user_session_id = l.user_session_id 
-         AND  lf.campaign_channel  = l.campaign_channel AND lf.type_of_conversion = l.type_of_conversion
-         ORDER BY 1, 2
-        ) 
-         
-         
-         SELECT uuid, user_session_id, global_session_id, created_at
-        , MIN(CASE WHEN campaign_touchpoint = "first_touchpoint" THEN campaign_channel END) AS  first_touchpoint_channel
-        --, MIN(CASE WHEN campaign_touchpoint = "last_touchpoint" THEN campaign_channel END) AS  last_touchpoint_channel
-        , MIN(CASE WHEN last_touchpoint_seq = "last_touchpoint_1" THEN campaign_channel END ) AS last_touchpoint_channel1
-        , MIN(CASE WHEN last_touchpoint_seq = "last_touchpoint_2" THEN campaign_channel END ) AS last_touchpoint_channel2
-        , MIN(CASE WHEN last_touchpoint_seq = "last_touchpoint_3"THEN campaign_channel END ) AS last_touchpoint_channel3
-         FROM b 
-         WHERE campaign_touchpoint IS NOT NULL OR campaign_touchpoint != '' 
-         GROUP BY  uuid, user_session_id, global_session_id, created_at
-         ORDER BY 1, 2
-  
-
-
-
-/* Version in SQLite   */ 
-
-   WITH a AS (
-   
-   SELECT uuid,
-       created_at,
-       SUM(is_new_session) OVER (ORDER BY uuid, created_at) AS global_session_id,
-       SUM(is_new_session) OVER (PARTITION BY uuid ORDER BY created_at) AS user_session_id,
-       campaign_channel,
-       conversion
-      FROM (
-        SELECT *,
-               CASE WHEN (strftime('%s',created_at) - strftime('%s',last_event))/60 > 30
-             OR last_event IS NULL
-           THEN 1 ELSE 0 END AS is_new_session
-         FROM (
-              SELECT uuid,
-                     created_at,
-                     LAG(created_at,1) OVER (PARTITION BY uuid ORDER BY created_at) AS last_event, 
-                     campaign_channel, 
-                     conversion
-                FROM events
-              ) last
-       ) final 
-            ORDER BY uuid, created_at, global_session_id, user_session_id
-              )
-          
-              
-  , first_touch AS ( 
-     SELECT uuid, MIN(user_session_id) min_session_id
-     FROM a 
-     GROUP BY uuid
-  )
-       
-      , last_touch AS (
-      SELECT uuid, user_session_id, global_session_id, created_at,
-        campaign_channel, conversion
-      , CASE WHEN conversion = 1 THEN 'last_touchpoint' END AS campaign_touchpoint
-       
-      FROM a 
-      ) 
-       
-      , b AS (
-       SELECT l.uuid, user_session_id, global_session_id, created_at, campaign_channel, conversion,
-       CASE WHEN campaign_touchpoint = "last_touchpoint"  THEN  'last_touchpoint'  
-        WHEN l.user_session_id = f.min_session_id  THEN 'first_touchpoint'
-        WHEN   l.user_session_id = f.min_session_id  AND  campaign_touchpoint = "last_touchpoint" THEN 'last_touchpoint' END  AS campaign_touchpoint --AND campaign_touchpoint != "last_touchpoint"
-       FROM last_touch l LEFT JOIN first_touch f ON l.uuid = f.uuid AND l.user_session_id = f.min_session_id
-       ) 
-       
-      , last_touch3 AS (
-      
-      SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, conversion, campaign_touchpoint,
-      "last_touchpoint" || "_" || CAST(rownum AS varchar)  AS last_touchpoint_seq
-      
-      FROM 
-      (SELECT uuid, user_session_id, global_session_id, created_at, campaign_channel, conversion, campaign_touchpoint
-      , ROW_NUMBER() OVER (PARTITION BY uuid, campaign_channel ORDER BY user_session_id ) AS rownum 
-      FROM b 
-      WHERE campaign_touchpoint = "last_touchpoint") last_touch2
-          ) 
-          
-          
-         SELECT b.uuid, b.user_session_id, b.global_session_id, b.campaign_channel, b.campaign_touchpoint,
-         last_touchpoint_seq
-         FROM b LEFT JOIN last_touch3 l ON b.uuid = l.uuid AND b.user_session_id = l.user_session_id
-       --  WHERE  b.campaign_touchpoint = "first_touchpoint" AND l.last_touchpoint_seq LIKE "last_touch%"
-     
-        ORDER BY 1, 2 
-  
